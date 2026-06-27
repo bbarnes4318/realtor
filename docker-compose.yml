@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    volumes:
+      - db_data:/app/data
+    environment:
+      - PORT=8080
+      - PLATFORM=${PLATFORM:-prod}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - USE_DB_LOCAL=${USE_DB_LOCAL:-true}
+      - DB_FILE=${DB_FILE:-file:/app/data/local.db}
+      - JWT_SECRET=${JWT_SECRET:-your_realtor_jwt_secret_token}
+      - SAVE_RAW_AGENTS=${SAVE_RAW_AGENTS:-false}
+      - THROTTLE_REQUEST_LIMIT=${THROTTLE_REQUEST_LIMIT:-5}
+      - DB_URL=${DB_URL}
+      - DB_AUTH_TOKEN=${DB_AUTH_TOKEN}
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+    healthcheck:
+      test: ["CMD", "sqlite3", "/app/data/local.db", "SELECT 1;"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - coolify
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=coolify"
+      # Insecure API router (HTTP) -> Redirects to HTTPS via realtors-redirect middleware
+      - "traefik.http.routers.realtors-api-insecure.entrypoints=http"
+      - "traefik.http.routers.realtors-api-insecure.rule=Host(`realtors.leadsbystorm.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.realtors-api-insecure.middlewares=realtors-redirect"
+      # Secure API router (HTTPS)
+      - "traefik.http.routers.realtors-api-secure.entrypoints=https"
+      - "traefik.http.routers.realtors-api-secure.rule=Host(`realtors.leadsbystorm.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.realtors-api-secure.service=realtors-api-service"
+      - "traefik.http.routers.realtors-api-secure.tls=true"
+      - "traefik.http.routers.realtors-api-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.realtors-api-secure.priority=100"
+      - "traefik.http.services.realtors-api-service.loadbalancer.server.port=8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../Dockerfile.frontend
+      args:
+        - NEXT_PUBLIC_API_URL=https://realtors.leadsbystorm.com
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+    depends_on:
+      - backend
+    networks:
+      - coolify
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=coolify"
+      # Redirect middleware for domain
+      - "traefik.http.middlewares.realtors-redirect.redirectscheme.scheme=https"
+      # Insecure frontend router (HTTP) -> Redirects to HTTPS via realtors-redirect middleware
+      - "traefik.http.routers.realtors-insecure.entrypoints=http"
+      - "traefik.http.routers.realtors-insecure.rule=Host(`realtors.leadsbystorm.com`)"
+      - "traefik.http.routers.realtors-insecure.middlewares=realtors-redirect"
+      # Secure frontend router (HTTPS)
+      - "traefik.http.routers.realtors-secure.entrypoints=https"
+      - "traefik.http.routers.realtors-secure.rule=Host(`realtors.leadsbystorm.com`)"
+      - "traefik.http.routers.realtors-secure.service=realtors-service"
+      - "traefik.http.routers.realtors-secure.tls=true"
+      - "traefik.http.routers.realtors-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.realtors-secure.priority=50"
+      - "traefik.http.services.realtors-service.loadbalancer.server.port=3000"
+
+volumes:
+  db_data:
+
+networks:
+  coolify:
+    name: coolify
+    external: true

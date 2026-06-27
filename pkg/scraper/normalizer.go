@@ -1,4 +1,4 @@
-package main
+package scraper
 
 import (
 	"fmt"
@@ -14,16 +14,15 @@ const (
 )
 
 // normalizeAgent normalizes the fields of an Agent struct.
-func (cfg *config) normalizeAgent(agent *Agent) {
-
+func (s *Scraper) normalizeAgent(agent *Agent) {
 	if normalizedAgentHref, err := tryNormalizeURL(agent.Href); err != nil {
-		cfg.logger.Warnf("error while normalizing agent href URL: %v", err)
+		s.logger.Warnf("error while normalizing agent href URL: %v", err)
 	} else {
 		agent.Href = normalizedAgentHref
 	}
 
 	if normalizedOfficeWebsite, err := tryNormalizeURL(agent.Office.Website); err != nil {
-		cfg.logger.Warnf("error while normalizing agent office website URL: %v", err)
+		s.logger.Warnf("error while normalizing agent office website URL: %v", err)
 	} else {
 		agent.Office.Website = normalizedOfficeWebsite
 	}
@@ -36,19 +35,19 @@ func (cfg *config) normalizeAgent(agent *Agent) {
 
 	for i := range agent.Phones {
 		if err := normalizePhone(&agent.Phones[i], agentCountry); err != nil {
-			cfg.logger.Warnf("error while normalizing agent phone: %v", err)
+			s.logger.Warnf("error while normalizing agent phone: %v", err)
 		}
 	}
 
 	for i := range agent.Office.Phones {
 		if err := normalizePhone(&agent.Office.Phones[i], officeCountry); err != nil {
-			cfg.logger.Warnf("error while normalizing agent office phone: %v", err)
+			s.logger.Warnf("error while normalizing agent office phone: %v", err)
 		}
 	}
 
 	for key, phone := range agent.Office.PhoneList {
 		if err := normalizePhone(&phone, officeCountry); err != nil {
-			cfg.logger.Warnf("error while normalizing agent office phone: %v", err)
+			s.logger.Warnf("error while normalizing agent office phone: %v", err)
 			continue
 		}
 		agent.Office.PhoneList[key] = phone
@@ -56,7 +55,7 @@ func (cfg *config) normalizeAgent(agent *Agent) {
 
 	for k, socialMedia := range agent.SocialMedias {
 		if normalizedSocialMediaHref, err := tryNormalizeURL(socialMedia.Href); err != nil {
-			cfg.logger.Warnf("error while normalizing agent social media URL: %v", err)
+			s.logger.Warnf("error while normalizing agent social media URL: %v", err)
 		} else {
 			agent.SocialMedias[k] = SocialMedia{
 				Href: normalizedSocialMediaHref,
@@ -112,8 +111,6 @@ func normalizeURL(rawURL string) (string, error) {
 	}
 
 	// Simplify URL if it has duplicate hostnames
-	// e.g. https://twitter.com/http://twitter.com/username, http://www.facebook.com/http://facebook.com/username etc
-
 	if strings.Contains(parsedURL.Path, strings.TrimPrefix(parsedURL.Host, "www.")) || strings.Contains(parsedURL.Path, ".") {
 		parsedPathURL, err := url.Parse(strings.TrimPrefix(parsedURL.Path, "/"))
 		if err != nil {

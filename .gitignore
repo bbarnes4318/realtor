@@ -31,3 +31,8 @@ go.work.sum
 
 # env file
 .env
+
+# Build and temporary artifacts
+project.tar.gz
+server-bin
+run_query.sh

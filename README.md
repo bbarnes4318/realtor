@@ -1,182 +1,127 @@
-# realtor-scraper
+# Realtor Scraper Web Application
+
 ![banner](./assets/banner.svg)
 
 ## Overview
-This project allows you to scrape all the real estate agents' information, including their contact details and stats from Realtor.com. We do this by reverse-engineering their internal API and bypassing the signing and verification of requests, thereby accessing all the data publicly.
+This project turns the Go-based Realtor.com agent scraper into a full-featured, production-ready internal web application. It features a modern Next.js dashboard panel, SQL database storage (SQLite or Turso), background scrape run scheduling, live streaming console logs, paginated search, and phone/URL deduplicated CSV exports.
 
-<img alt="intro" src="./assets/intro.gif" width="600" />
+---
 
-We are using `libsql` to manage the database, which organizes data into various interconnected tables. The database will store crucial information, including agent details, office locations, areas of operation, sales data, and social media profiles. This structure ensures that data remains organized and easily accessible for analysis and future use.
+> [!IMPORTANT]
+> **🛡️ LEGAL & COMPLIANCE WARNING**
+> - This tool is designed strictly for internal research and data aggregation where the operator has the explicit legal right to collect and process such data.
+> - **Anti-Abuse Systems:** The code does **NOT** bypass CAPTCHAs, paywalls, log-ins, or other access control systems. Bypassing these controls is not supported.
+> - **Privacy Laws:** Phone numbers, email addresses, and MLS records collected via this scraper may be subject to marketing regulations (TCPA, CAN-SPAM), state/local privacy laws (CCPA, GDPR), and platform terms. Ensure full legal clearance before utilizing the output datasets.
 
-![db_schema](./assets/db_schema.png)
+---
+
+## Architecture
+
+- **Backend (Go):** Modular service layer consisting of:
+  - `pkg/scraper`: rotation parameters, backoff retries, and normalizers.
+  - `pkg/job`: thread-safe concurrent jobs registry (start, pause, resume, cancel, DB-backed logging).
+  - `pkg/export`: CSV dataset generator with optional deduplication.
+  - `pkg/api`: HTTP router exposing `/api/health`, `/api/stats`, `/api/jobs`, `/api/agents`, `/api/export`.
+- **Frontend (Next.js + Tailwind + TypeScript):** A sleek slate dashboard for overview statistics, run setup, real-time log viewers, search tables, and download portals.
+- **Database (SQLite/libsql):** Goose-migrated schema storing agents, offices, MLS records, social links, phone numbers, and job runs.
+
+---
 
 ## Prerequisites
 
-Before running the project, make sure you have Go installed on your system.
+Ensure you have the following installed:
+1. **Go (v1.22+):** [https://golang.org/dl/](https://golang.org/dl/)
+2. **Node.js (v18+):** [https://nodejs.org/](https://nodejs.org/)
+3. **Goose CLI:** Database migration tool
+   ```bash
+   go install github.com/pressly/goose/v3/cmd/goose@latest
+   ```
 
-### Install Go
+---
 
-1. Visit the official Go website: [https://golang.org/dl/](https://golang.org/dl/)
-2. Download the appropriate installer for your operating system.
-3. Follow the installation instructions for your platform.
+## Setup Instructions
 
-To verify the installation, open your terminal or command prompt and run:
-
-```bash
-go version
-```
-This should return the installed version of Go.
-
-### Clone the Project
-Once Go is installed, you can clone this project to your local machine.
-
-Run the following command in your terminal:
-```bash
-git clone https://github.com/suffer-sami/realtor-scraper.git
-```
-
-Navigate to the project directory:
-
-```bash
-cd realtor-scraper
-```
-
-### Install Go Dependencies
-Before running the project, ensure that your Go dependencies are up to date. Run the following command to tidy up your Go modules:
-
-```bash
-go mod tidy
-```
-This will clean up any unnecessary dependencies and ensure everything is properly installed.
-
-### Install Goose
-
-This project uses Goose for database migrations. To install Goose, run the following command:
-
-
-```bash
-go install github.com/pressly/goose/v3/cmd/goose@latest
-```
-
-### Run Migrations
-Once Goose is installed, you can apply the migrations to set up the database.
-
-Set the necessary environment variables:
-
-- `GOOSE_DRIVER` — Specifies the database driver.
-- `GOOSE_MIGRATION_DIR` — Directory where migration files are located.
-- `GOOSE_DBSTRING` — Connection string to your database (local or remote)
-
-Run the migrations with the following command:
-
-```bash
-# For local database
-GOOSE_DRIVER="turso" GOOSE_MIGRATION_DIR="./sql/schema/" GOOSE_DBSTRING="file:./local.db" goose up
-
-# OR
-
-# For remote turso database
-GOOSE_DRIVER="turso" GOOSE_MIGRATION_DIR="./sql/schema/" GOOSE_DBSTRING="libsql://dbname.turso.io?authToken=token" goose up
-```
-
-## Run the Project
-
-Follow these steps to configure and run the project:
-
-### Copy the `.env` File
-
-Start by copying the example `.env` file to set up your environment variables:
-
+### 1. Configure Environments
+Copy the template `.env.example` into `.env` and fill out your variables:
 ```bash
 cp .env.example .env
 ```
+Ensure you set your Realtor API key/secret in `JWT_SECRET`.
 
-Edit the .env file to add your details, such as the database connection string, API tokens, and other necessary configuration.
-
-### Run the Scraper
-To build and run the scraper, use the following commands:
-
-**Build**:
+### 2. Apply Database Migrations
+Use Goose to apply schema migrations to a local SQLite database:
 ```bash
-go build 
+goose -dir sql/schema sqlite3 local.db up
 ```
 
-**Run**:
+### 3. Run Backend API Server
+Start the HTTP API server:
 ```bash
-./realtor-scraper .
-
-# OR
-
-# Run with a custom number of concurrent threads (default: 3)
-./realtor-scraper . 5
+go run . --server --port 8080
 ```
 
-## Walkthrough
-> [!NOTE]
-> For this walkthrough, I'm using a 5-thread configuration to fetch 10 requests with LOG_LEVEL=INFO in a Docker container with rotating SOCKS5 proxies.
+### 4. Run Frontend Dashboard
+Open a new terminal tab, navigate to the frontend directory, install dependencies, and start the development server:
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) to view the dashboard!
 
-> [!CAUTION]
-> **Avoid running the scraper without proxies.** If you're not using Docker w/ proxies, consider using any rotating system-level proxies or even a VPN.
+---
 
-<img alt="walkthrough" src="./assets/demo.gif" width="600" />
+## CLI Scraper Usage
 
-
-<details>
-<summary>Detailed Log</summary>
-
-
-Following is an example of a dummy agent log entry with `LOG_LEVEL=DEBUG`.
+You can still use the scraper directly via the terminal interface. Running the CLI creates a scrape job in the database to track execution progress.
 
 ```bash
-2024/12/10 00:15:55 realtor-scraper  INFO: FETCHING: Total Results
-2024/12/10 00:16:01 realtor-scraper  INFO: STATS: Total Agents: 1666411
-2024/12/10 00:16:01 realtor-scraper  INFO: STATS: (Total Requests: 83321, Remaining Requests: 83320)
-2024/12/10 00:16:01 realtor-scraper  INFO: FETCHING: Agents (offset 0, limit 20)
-2024-12-09 14:46:25 INFO realtor-scraper Agent: Dummy Agent Name
-2024-12-09 14:46:25 DEBUG realtor-scraper - sales data: 2024-11-25
-2024-12-09 14:46:25 DEBUG realtor-scraper - listing data: 2024-12-08 23:59:59 +0000 UTC
-2024-12-09 14:46:25 DEBUG realtor-scraper - social medias:
-2024-12-09 14:46:25 DEBUG realtor-scraper - feed licences:
-2024-12-09 14:46:25 DEBUG realtor-scraper - mls:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - MLS1
-2024-12-09 14:46:25 DEBUG realtor-scraper   - MLS2
-2024-12-09 14:46:25 DEBUG realtor-scraper - mls history:
-2024-12-09 14:46:25 DEBUG realtor-scraper - languages:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - English
-2024-12-09 14:46:25 DEBUG realtor-scraper   - Spanish
-2024-12-09 14:46:25 DEBUG realtor-scraper - user languages:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - English
-2024-12-09 14:46:25 DEBUG realtor-scraper   - Spanish
-2024-12-09 14:46:25 DEBUG realtor-scraper - zips:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - 12345
-2024-12-09 14:46:25 DEBUG realtor-scraper   - 67890
-2024-12-09 14:46:25 DEBUG realtor-scraper   - 98765
-2024-12-09 14:46:25 DEBUG realtor-scraper - areas:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - Cityville, CA
-2024-12-09 14:46:25 DEBUG realtor-scraper   - Countyville, TX
-2024-12-09 14:46:25 DEBUG realtor-scraper - marketing areas:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - Neighborhood1, Cityville, CA
-2024-12-09 14:46:25 DEBUG realtor-scraper   - Neighborhood2, Countyville, TX
-2024-12-09 14:46:25 DEBUG realtor-scraper - designations:
-2024-12-09 14:46:25 DEBUG realtor-scraper - specializations:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - Residential Sales
-2024-12-09 14:46:25 DEBUG realtor-scraper   - Commercial Leasing
-2024-12-09 14:46:25 DEBUG realtor-scraper - address:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - {Street: 123 Main St, City: Anytown, State: CA, Zip: 98765}
-2024-12-09 14:46:25 DEBUG realtor-scraper - phones:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - XXX-XXX-XXXX
-2024-12-09 14:46:25 DEBUG realtor-scraper   - XXX-XXX-XXXX
-2024-12-09 14:46:25 DEBUG realtor-scraper - broker:
-2024-12:09 14:46:25 DEBUG realtor-scraper   - Dummy Brokerage
-2024-12-09 14:46:25 DEBUG realtor-scraper - office address:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - {Street: 456 Elm St, City: Anytown, State: CA, Zip: 98765}
-2024-12-09 14:46:25 DEBUG realtor-scraper - office:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - Dummy Brokerage
-2024-12-09 14:46:25 DEBUG realtor-scraper - office phones:
-2024-12-09 14:46:25 DEBUG realtor-scraper   - {Ext: Number: XXX-XXX-XXXX, Type: Office, IsValid: true}
-2024-12-09 14:46:25 DEBUG realtor-scraper   - {Ext: Number: XXX-XXX-XXXX, Type: Mobile, IsValid: true}
-# (cont... )
+# Standard scrape run
+go run .
 
-2024-12-09 14:46:25 INFO realtor-scraper DONE
+# Run with 5 threads
+go run . --threads 5
+
+# Scrape a capped count of 100 agents
+go run . --limit 100
+
+# Name the run in the database
+go run . --job-name "California Agent Scan"
+
+# Run in short development mode (caps at 10 agents, runs quick checks)
+go run . --dev
+
+# Scrape and export to CSV directly
+go run . --job-name "CLI Export Run" --limit 50 --export agents_output.csv
 ```
-</details>
+
+---
+
+## Docker Compose Setup
+
+To launch the full stack (Go Backend API + Next.js Frontend + local database volume) automatically:
+
+```bash
+docker-compose up --build
+```
+
+- **Frontend Panel:** [http://localhost:3000](http://localhost:3000)
+- **Go API Server:** [http://localhost:8080](http://localhost:8080)
+- **SQLite Database volume:** Persisted inside `./data` or Docker volumes.
+
+---
+
+## Production Deployment (87.99.155.241 / realtors.leadsbystorm.com)
+
+To deploy the application to your Ubuntu/Debian production server:
+
+1. **DNS Setup:** Set your domain's DNS `A Record` for `realtors.leadsbystorm.com` to point to the server IP `87.99.155.241`.
+2. **Execute Deployment Script:** SSH into your server and run:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/suffer-sami/realtor-scraper/main/deploy/deploy.sh -o deploy.sh
+   chmod +x deploy.sh
+   ./deploy.sh
+   ```
+   *Alternatively, copy the `./deploy` folder contents to your server manually and execute `./deploy.sh`.*
+
+The script will automatically install Nginx, Docker, Docker Compose, Certbot, pull the repository, build containers, link the reverse proxy, and obtain a free Let's Encrypt SSL certificate.

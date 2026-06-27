@@ -1,0 +1,8 @@
+{
+  "name": "Proxy Test Run",
+  "max_agents_limit": 5,
+  "concurrency": 1,
+  "filters": {
+    "zip": "90210"
+  }
+}
