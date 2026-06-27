@@ -14,17 +14,18 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/suffer-sami/realtor-scraper/internal/database"
 	"github.com/suffer-sami/realtor-scraper/internal/logger"
+	"github.com/suffer-sami/realtor-scraper/pkg/scrapedo"
 )
 
 type Scraper struct {
-	client               *http.Client
-	db                   *sql.DB
-	dbQueries            *database.Queries
-	saveRawAgents        bool
-	logger               logger.Logger
-	jwtSecret            string
-	mu                   *sync.Mutex
-	jobID                string
+	client        *http.Client
+	db            *sql.DB
+	dbQueries     *database.Queries
+	saveRawAgents bool
+	logger        logger.Logger
+	jwtSecret     string
+	mu            *sync.Mutex
+	jobID         string
 }
 
 func NewScraper(db *sql.DB, client *http.Client, jwtSecret string, saveRawAgents bool, logger logger.Logger, jobID string) *Scraper {
@@ -74,26 +75,31 @@ func (s *Scraper) getRequestParams(offset, resultsPerPage int, filters *JobFilte
 			params.PostalCode = filters.Zip
 			params.IsPostalSearch = "true"
 		}
+
 		if filters.AgentName != "" {
 			params.Name = filters.AgentName
 		}
 	}
+
 	return params
 }
 
 // GetTotalResults retrieves the total number of matching rows.
 func (s *Scraper) GetTotalResults(ctx context.Context, filters *JobFilters) (int, error) {
 	payload := s.getRequestParams(0, 0, filters)
+
 	response, err := s.GetSearchResultsWithRetry(ctx, payload)
 	if err != nil {
 		return 0, fmt.Errorf("error getting total results: %w", err)
 	}
+
 	return response.MatchingRows, nil
 }
 
 // GetAgents retrieves a list of normalized agents matching the search criteria.
 func (s *Scraper) GetAgents(ctx context.Context, offset, resultsPerPage int, filters *JobFilters) ([]Agent, error) {
 	payload := s.getRequestParams(offset, resultsPerPage, filters)
+
 	response, err := s.GetSearchResultsWithRetry(ctx, payload)
 	if err != nil {
 		return nil, fmt.Errorf("error getting agents: %w", err)
@@ -110,6 +116,7 @@ func (s *Scraper) GetAgents(ctx context.Context, offset, resultsPerPage int, fil
 func (s *Scraper) GetSearchResultsWithRetry(ctx context.Context, payload SearchRequestParams) (SearchRequestResponse, error) {
 	var response SearchRequestResponse
 	var err error
+
 	backoff := 1 * time.Second
 	maxRetries := 3
 
@@ -124,6 +131,7 @@ func (s *Scraper) GetSearchResultsWithRetry(ctx context.Context, payload SearchR
 		}
 
 		s.logger.Warnf("Realtor API request failed (attempt %d/%d): %v", i+1, maxRetries+1, err)
+
 		if i < maxRetries {
 			select {
 			case <-ctx.Done():
@@ -137,23 +145,26 @@ func (s *Scraper) GetSearchResultsWithRetry(ctx context.Context, payload SearchR
 	return SearchRequestResponse{}, fmt.Errorf("after %d retries, request failed: %w", maxRetries, err)
 }
 
-// getSearchResults fetches search results from the API.
+// getSearchResults fetches search results from the Realtor API.
+// If SCRAPEDO_TOKEN is present and SCRAPEDO_ENABLED is not false,
+// the request is routed through Scrape.do.
 func (s *Scraper) getSearchResults(payload SearchRequestParams) (SearchRequestResponse, error) {
-	parsedURL, _ := url.Parse(apiEndpoint)
+	parsedURL, err := url.Parse(apiEndpoint)
+	if err != nil {
+		return SearchRequestResponse{}, fmt.Errorf("failed to parse Realtor API URL: %w", err)
+	}
+
 	queryParams, err := buildQueryParams(payload)
 	if err != nil {
 		return SearchRequestResponse{}, fmt.Errorf("failed to build query params: %w", err)
 	}
+
 	parsedURL.RawQuery = queryParams.Encode()
+	targetURL := parsedURL.String()
 
 	token, err := generateBearerToken(s.jwtSecret)
 	if err != nil {
 		return SearchRequestResponse{}, fmt.Errorf("failed to generate token: %w", err)
-	}
-
-	req, err := http.NewRequest("GET", parsedURL.String(), nil)
-	if err != nil {
-		return SearchRequestResponse{}, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	userAgent, err := getRandomUserAgent()
@@ -161,25 +172,54 @@ func (s *Scraper) getSearchResults(payload SearchRequestParams) (SearchRequestRe
 		return SearchRequestResponse{}, fmt.Errorf("failed to get random user agent: %w", err)
 	}
 
-	// Fetch home page to populate the client's cookie jar with Kasada credentials
-	reqHome, err := http.NewRequest("GET", baseUrl+"/", nil)
-	if err != nil {
-		return SearchRequestResponse{}, fmt.Errorf("failed to create home preflight request: %w", err)
-	}
-	reqHome.Header.Set("User-Agent", userAgent)
-	reqHome.Header.Set("sec-ch-ua", `"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"`)
-	reqHome.Header.Set("sec-ch-ua-mobile", "?0")
-	reqHome.Header.Set("sec-ch-ua-platform", `"Windows"`)
-	reqHome.Header.Set("accept-language", "en-US,en;q=0.9")
+	requestURL := targetURL
+	usingScrapeDo := scrapedo.Enabled()
 
-	respHome, err := s.client.Do(reqHome)
-	if err != nil {
-		return SearchRequestResponse{}, fmt.Errorf("home preflight request failed: %w", err)
-	}
-	bodyHome, _ := io.ReadAll(respHome.Body)
-	respHome.Body.Close()
-	s.logger.Infof("Preflight Status: %d. Cookies: %+v. Body length: %d", respHome.StatusCode, respHome.Header["Set-Cookie"], len(bodyHome))
+	if usingScrapeDo {
+		requestURL, err = scrapedo.BuildURL(targetURL)
+		if err != nil {
+			return SearchRequestResponse{}, fmt.Errorf("failed to build Scrape.do request URL: %w", err)
+		}
 
+		s.logger.Infof("Routing Realtor API request through Scrape.do")
+	} else {
+		// Legacy direct mode.
+		// This preflight fetches Realtor.com first to populate the client's cookie jar.
+		reqHome, err := http.NewRequest("GET", baseUrl+"/", nil)
+		if err != nil {
+			return SearchRequestResponse{}, fmt.Errorf("failed to create home preflight request: %w", err)
+		}
+
+		reqHome.Header.Set("User-Agent", userAgent)
+		reqHome.Header.Set("sec-ch-ua", `"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"`)
+		reqHome.Header.Set("sec-ch-ua-mobile", "?0")
+		reqHome.Header.Set("sec-ch-ua-platform", `"Windows"`)
+		reqHome.Header.Set("accept-language", "en-US,en;q=0.9")
+
+		respHome, err := s.client.Do(reqHome)
+		if err != nil {
+			return SearchRequestResponse{}, fmt.Errorf("home preflight request failed: %w", err)
+		}
+
+		bodyHome, _ := io.ReadAll(respHome.Body)
+		respHome.Body.Close()
+
+		s.logger.Infof(
+			"Preflight Status: %d. Cookies: %+v. Body length: %d",
+			respHome.StatusCode,
+			respHome.Header["Set-Cookie"],
+			len(bodyHome),
+		)
+	}
+
+	req, err := http.NewRequest("GET", requestURL, nil)
+	if err != nil {
+		return SearchRequestResponse{}, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	// These headers are still required because Realtor's API expects them.
+	// When using Scrape.do, SCRAPEDO_CUSTOM_HEADERS=true and SCRAPEDO_FORWARD_HEADERS=true
+	// allow these headers to reach the target Realtor request.
 	setHeaders(req, token, userAgent)
 
 	resp, err := s.client.Do(req)
@@ -219,6 +259,7 @@ func buildQueryParams(payload SearchRequestParams) (url.Values, error) {
 	}
 
 	queryParams := url.Values{}
+
 	for key, value := range payloadMap {
 		queryParams.Add(key, fmt.Sprintf("%v", value))
 	}
@@ -252,12 +293,13 @@ func generateBearerToken(secret string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
 	return token.SignedString([]byte(secret))
 }
 
 // getRandomUserAgent gives a random useragent for rotating useragent.
 func getRandomUserAgent() (string, error) {
-	// Enforce Windows Chrome 133 to match the TLS fingerprint and sec-ch-ua headers exactly
+	// Enforce Windows Chrome 133 to match the TLS fingerprint and sec-ch-ua headers exactly.
 	return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36", nil
 }
 
