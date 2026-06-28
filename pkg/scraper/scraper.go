@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -183,8 +184,6 @@ func (s *Scraper) getSearchResults(payload SearchRequestParams) (SearchRequestRe
 
 		s.logger.Infof("Routing Realtor API request through Scrape.do")
 	} else {
-		// Legacy direct mode.
-		// This preflight fetches Realtor.com first to populate the client's cookie jar.
 		reqHome, err := http.NewRequest("GET", baseUrl+"/", nil)
 		if err != nil {
 			return SearchRequestResponse{}, fmt.Errorf("failed to create home preflight request: %w", err)
@@ -217,9 +216,6 @@ func (s *Scraper) getSearchResults(payload SearchRequestParams) (SearchRequestRe
 		return SearchRequestResponse{}, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	// These headers are still required because Realtor's API expects them.
-	// When using Scrape.do, SCRAPEDO_CUSTOM_HEADERS=true and SCRAPEDO_FORWARD_HEADERS=true
-	// allow these headers to reach the target Realtor request.
 	setHeaders(req, token, userAgent)
 
 	resp, err := s.client.Do(req)
@@ -233,17 +229,57 @@ func (s *Scraper) getSearchResults(payload SearchRequestParams) (SearchRequestRe
 		return SearchRequestResponse{}, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	body = unwrapQuotedJSONIfNeeded(body)
+
 	if resp.StatusCode != http.StatusOK {
-		s.logger.Errorf("Failed request status: %d. Headers: %+v. Body: %s", resp.StatusCode, resp.Header, string(body))
+		s.logger.Errorf("Failed request status: %d. Headers: %+v. Body: %s", resp.StatusCode, resp.Header, previewBody(body))
 		return SearchRequestResponse{}, fmt.Errorf("invalid status code: %d", resp.StatusCode)
 	}
 
 	var response SearchRequestResponse
 	if err := json.Unmarshal(body, &response); err != nil {
+		s.logger.Errorf("Failed to decode Realtor JSON. Body preview: %s", previewBody(body))
 		return SearchRequestResponse{}, fmt.Errorf("failed to decode JSON response: %w", err)
 	}
 
 	return response, nil
+}
+
+// unwrapQuotedJSONIfNeeded handles cases where the upstream/proxy returns
+// the JSON object as a quoted JSON string instead of a raw JSON object.
+func unwrapQuotedJSONIfNeeded(body []byte) []byte {
+	trimmed := strings.TrimSpace(string(body))
+
+	if trimmed == "" {
+		return body
+	}
+
+	if !strings.HasPrefix(trimmed, `"`) {
+		return body
+	}
+
+	var unwrapped string
+	if err := json.Unmarshal([]byte(trimmed), &unwrapped); err != nil {
+		return body
+	}
+
+	unwrapped = strings.TrimSpace(unwrapped)
+
+	if strings.HasPrefix(unwrapped, "{") || strings.HasPrefix(unwrapped, "[") {
+		return []byte(unwrapped)
+	}
+
+	return body
+}
+
+func previewBody(body []byte) string {
+	text := strings.TrimSpace(string(body))
+
+	if len(text) > 1000 {
+		return text[:1000] + "...[truncated]"
+	}
+
+	return text
 }
 
 // buildQueryParams converts the search payload into query parameters.
@@ -299,7 +335,6 @@ func generateBearerToken(secret string) (string, error) {
 
 // getRandomUserAgent gives a random useragent for rotating useragent.
 func getRandomUserAgent() (string, error) {
-	// Enforce Windows Chrome 133 to match the TLS fingerprint and sec-ch-ua headers exactly.
 	return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36", nil
 }
 
