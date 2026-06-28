@@ -56,7 +56,7 @@ func FromEnv() Config {
 		WaitSelector:        os.Getenv("SCRAPEDO_WAIT_SELECTOR"),
 		BlockResources:      envBool("SCRAPEDO_BLOCK_RESOURCES", true),
 		Output:              envString("SCRAPEDO_OUTPUT", "raw"),
-		TransparentResponse: envBool("SCRAPEDO_TRANSPARENT_RESPONSE", true),
+		TransparentResponse: envBool("SCRAPEDO_TRANSPARENT_RESPONSE", false),
 	}
 }
 
