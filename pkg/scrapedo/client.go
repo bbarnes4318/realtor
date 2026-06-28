@@ -91,8 +91,11 @@ func BuildURLWithConfig(targetURL string, cfg Config) (string, error) {
 	params.Set("token", cfg.Token)
 	params.Set("url", targetURL)
 	params.Set("super", boolString(cfg.Super))
-	params.Set("customHeaders", boolString(cfg.CustomHeaders))
-	params.Set("forwardHeaders", boolString(cfg.ForwardHeaders))
+	if cfg.CustomHeaders {
+		params.Set("customHeaders", "true")
+	} else if cfg.ForwardHeaders {
+		params.Set("forwardHeaders", "true")
+	}
 	params.Set("extraHeaders", boolString(cfg.ExtraHeaders))
 	params.Set("render", boolString(cfg.Render))
 	params.Set("timeout", strconv.Itoa(cfg.Timeout))
