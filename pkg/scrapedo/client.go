@@ -97,12 +97,16 @@ func BuildURLWithConfig(targetURL string, cfg Config) (string, error) {
 		params.Set("forwardHeaders", "true")
 	}
 	params.Set("extraHeaders", boolString(cfg.ExtraHeaders))
-	params.Set("render", boolString(cfg.Render))
+	if cfg.Render {
+		params.Set("render", "true")
+		if cfg.BlockResources {
+			params.Set("blockResources", "true")
+		}
+	}
 	params.Set("timeout", strconv.Itoa(cfg.Timeout))
 	params.Set("retryTimeout", strconv.Itoa(cfg.RetryTimeout))
 	params.Set("disableRetry", boolString(cfg.DisableRetry))
 	params.Set("device", cfg.Device)
-	params.Set("blockResources", boolString(cfg.BlockResources))
 	params.Set("output", cfg.Output)
 	params.Set("transparentResponse", boolString(cfg.TransparentResponse))
 
